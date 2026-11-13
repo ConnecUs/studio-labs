@@ -69,11 +69,64 @@ function Index() {
           );
         })}
       </section>
-      <footer className="mx-auto flex max-w-6xl items-center justify-between px-6 py-12 font-mono text-xs text-muted-foreground">
-        <span>© Dazyners Studio</span>
-        <Link to="/admin" className="hover:text-primary transition-colors">
-          Manager Access
-        </Link>
+      <footer className="mx-auto mt-12 max-w-6xl border-t border-border/60 px-6 py-10 font-mono text-xs text-muted-foreground">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-1">
+            <p className="text-foreground/90 font-semibold">
+              © 2026 Kush Novels LLC. All rights reserved.
+            </p>
+            <p>
+              Rights holder to{" "}
+              <a
+                href="https://25th-dynasty.com"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                25th-dynasty.com
+              </a>{" "}
+              &amp;{" "}
+              <a
+                href="https://kushnovels.com/studio-labs/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                Studio Labs
+              </a>
+              {" · "}Independent Software &amp; Transmedia Publishing House.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-5">
+            <a
+              href="https://kushnovels.com"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary transition-colors"
+            >
+              KushNovels.com
+            </a>
+            <a
+              href="https://kushnovels.com/privacy"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary transition-colors"
+            >
+              Privacy Policy
+            </a>
+            <a
+              href="https://kushnovels.com/terms"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary transition-colors"
+            >
+              Terms of Service
+            </a>
+            <Link to="/admin" className="hover:text-primary transition-colors">
+              Manager Access
+            </Link>
+          </div>
+        </div>
       </footer>
     </div>
   );
