@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1794421015888,
+      "tag": "0000_hub_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794422547550,
+      "tag": "0001_purchases_payment_fields",
+      "breakpoints": true
+    }
+  ]
+}
