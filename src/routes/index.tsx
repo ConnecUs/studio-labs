@@ -3,7 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { ArrowUpRight } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { toolsQuery } from "@/lib/tools";
-import { getDefaultCoverForTool } from "@/lib/coverGallery";
+import { getDefaultCoverForTool, resolveCoverUrl } from "@/lib/coverGallery";
 import { getToolBadgeSummary } from "@/lib/monetization";
 
 export const Route = createFileRoute("/")({
@@ -43,7 +43,7 @@ function Index() {
           <Link key={t.id} to="/tools/$slug" params={{ slug: t.slug }} className="glass group flex flex-col rounded-2xl p-5 transition-all hover:-translate-y-1 hover:border-primary/50">
             <div className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-muted">
               <img
-                src={t.cover_url || getDefaultCoverForTool(t)}
+                src={resolveCoverUrl(t.cover_url) || getDefaultCoverForTool(t)}
                 alt={t.name}
                 className="h-full w-full object-cover transition-transform group-hover:scale-105"
                 onError={(e) => {

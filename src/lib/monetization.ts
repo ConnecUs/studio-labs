@@ -3,8 +3,15 @@
  * Allows configuring Free, Freemium, One-Time, and Subscription tiers for any injected online tool.
  */
 
-export type BillingModel = "free" | "one_time" | "monthly" | "yearly";
-export type AccessLevel = "free" | "freemium" | "pro" | "enterprise";
+export type BillingModel =
+  | "free"
+  | "one_time"
+  | "weekly"
+  | "monthly"
+  | "quarterly"
+  | "yearly"
+  | "custom";
+export type AccessLevel = string;
 
 export interface MonetizationTier {
   id: string;
@@ -18,6 +25,9 @@ export interface MonetizationTier {
   features: string[];
   highlighted: boolean;
   ctaLabel: string;
+  badgeLabel?: string;
+  customBillingLabel?: string;
+  trialDays?: number;
 }
 
 const TIERS_STORAGE_KEY = "kush_tools_monetization_tiers_v1";
@@ -229,17 +239,45 @@ export function saveToolTiers(toolKey: string, tiers: MonetizationTier[]): void 
   }
 }
 
-export function formatTierPrice(priceCents: number, billingModel: BillingModel): string {
+function getCurrencySymbol(currency?: string): string {
+  switch ((currency || "usd").toLowerCase()) {
+    case "eur":
+      return "€";
+    case "gbp":
+      return "£";
+    case "cad":
+      return "CA$";
+    case "aud":
+      return "A$";
+    case "usd":
+    default:
+      return "$";
+  }
+}
+
+export function formatTierPrice(
+  priceCents: number,
+  billingModel: BillingModel,
+  currency = "usd",
+  customBillingLabel?: string
+): string {
   if (billingModel === "free" || priceCents <= 0) return "Free";
-  const dollars = (priceCents / 100).toFixed(priceCents % 100 === 0 ? 0 : 2);
+  const symbol = getCurrencySymbol(currency);
+  const amount = (priceCents / 100).toFixed(priceCents % 100 === 0 ? 0 : 2);
   switch (billingModel) {
+    case "weekly":
+      return `${symbol}${amount}/wk`;
     case "monthly":
-      return `$${dollars}/mo`;
+      return `${symbol}${amount}/mo`;
+    case "quarterly":
+      return `${symbol}${amount}/qtr`;
     case "yearly":
-      return `$${dollars}/yr`;
+      return `${symbol}${amount}/yr`;
+    case "custom":
+      return `${symbol}${amount}${customBillingLabel ? ` ${customBillingLabel}` : ""}`;
     case "one_time":
     default:
-      return `$${dollars}`;
+      return `${symbol}${amount}`;
   }
 }
 
@@ -261,7 +299,12 @@ export function getToolBadgeSummary(toolKey: string): {
     return { label: "FREE", isPaid: false, isFreemium: false };
   }
   const lowestPaid = paidTiers[0]!;
-  const priceText = formatTierPrice(lowestPaid.priceCents, lowestPaid.billingModel);
+  const priceText = formatTierPrice(
+    lowestPaid.priceCents,
+    lowestPaid.billingModel,
+    lowestPaid.currency,
+    lowestPaid.customBillingLabel
+  );
   if (hasFree) {
     return { label: `FREEMIUM · PRO ${priceText}`, isPaid: true, isFreemium: true };
   }

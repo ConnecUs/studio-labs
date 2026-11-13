@@ -5,6 +5,7 @@ import { useSession } from "@/hooks/use-session";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck } from "lucide-react";
 import { isCeoUnlocked } from "@/components/CeoCodeGate";
+import { clearNotificationLog } from "@/lib/notificationLog";
 
 export function SiteHeader() {
   const { user } = useSession();
@@ -15,6 +16,7 @@ export function SiteHeader() {
   async function signOut() {
     await qc.cancelQueries();
     qc.clear();
+    clearNotificationLog();
     await sovereignAuth.signOut();
     navigate({ to: "/auth", replace: true });
   }

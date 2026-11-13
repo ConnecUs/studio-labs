@@ -103,14 +103,31 @@ export function saveLocalStoredTools(tools: Tool[]): void {
   void sovereignToolsDb.saveAll(tools);
 }
 
+export async function saveLocalStoredToolsAsync(tools: Tool[]): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tools));
+  } catch (err) {
+    console.error("Failed to save local tools:", err);
+  }
+  await sovereignToolsDb.saveAll(tools);
+}
+
 export function clearLocalStoredTools(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(LOCAL_STORAGE_KEY);
   void sovereignToolsDb.clear();
 }
 
-export async function saveRemoteTools(tools: Tool[], ceoCode: string): Promise<boolean> {
-  if (typeof window === "undefined" || !ceoCode) return false;
+export interface RemoteSaveResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+export async function saveRemoteTools(tools: Tool[], ceoCode: string): Promise<RemoteSaveResult> {
+  if (typeof window === "undefined") return { ok: false, error: "Not in browser" };
+  if (!ceoCode) return { ok: false, error: "Missing CEO access code" };
   try {
     const res = await fetch("/api/studio-labs/tools", {
       method: "POST",
@@ -120,9 +137,12 @@ export async function saveRemoteTools(tools: Tool[], ceoCode: string): Promise<b
       },
       body: JSON.stringify({ tools }),
     });
-    return res.ok;
-  } catch {
-    return false;
+    if (!res.ok) {
+      return { ok: false, status: res.status, error: `HTTP ${res.status} ${res.statusText}` };
+    }
+    return { ok: true, status: res.status };
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

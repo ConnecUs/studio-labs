@@ -2,13 +2,13 @@ import { useState } from "react";
 import {
   type MonetizationTier,
   type BillingModel,
-  type AccessLevel,
   TIER_PRESET_BUNDLES,
   formatTierPrice,
 } from "@/lib/monetization";
 import { queryLocalModel } from "@/lib/modelHubRouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -18,8 +18,11 @@ import {
   Sparkles,
   RefreshCw,
   Crown,
+  ArrowUp,
+  ArrowDown,
+  Copy,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notificationLog";
 
 interface MonetizationTierEditorProps {
   toolKey: string;
@@ -30,6 +33,17 @@ interface MonetizationTierEditorProps {
   selectedModel?: string;
   ollamaOnline?: boolean;
 }
+
+const ACCESS_LEVEL_SUGGESTIONS = [
+  "free",
+  "freemium",
+  "pro",
+  "enterprise",
+  "vip",
+  "founder",
+  "team",
+  "beta",
+];
 
 export function MonetizationTierEditor({
   toolKey,
@@ -44,7 +58,7 @@ export function MonetizationTierEditor({
 
   const addBlankTier = () => {
     const newTier: MonetizationTier = {
-      id: `tier-${Date.now()}`,
+      id: `tier-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       toolKey: toolKey || "new-tool",
       tierName: tiers.length === 0 ? "Free Access" : "Creator Pro",
       accessLevel: tiers.length === 0 ? "free" : "pro",
@@ -55,6 +69,9 @@ export function MonetizationTierEditor({
       features: tiers.length === 0 ? ["Live preview access"] : ["Full tool access", "Unlimited exports"],
       highlighted: tiers.length > 0,
       ctaLabel: tiers.length === 0 ? "Launch Free" : "Upgrade — $19/mo",
+      badgeLabel: tiers.length > 0 ? "Popular" : "",
+      customBillingLabel: "",
+      trialDays: 0,
     };
     onChange([...tiers, newTier]);
   };
@@ -76,16 +93,38 @@ export function MonetizationTierEditor({
     onChange(tiers.filter((t) => t.id !== id));
   };
 
+  const duplicateTier = (tier: MonetizationTier) => {
+    const copy: MonetizationTier = {
+      ...tier,
+      id: `tier-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      tierName: `${tier.tierName} (Copy)`,
+      highlighted: false,
+      features: [...tier.features],
+    };
+    onChange([...tiers, copy]);
+    notify.info(`Duplicated tier "${tier.tierName}"`, "tiers");
+  };
+
+  const moveTier = (index: number, dir: -1 | 1) => {
+    const target = index + dir;
+    if (target < 0 || target >= tiers.length) return;
+    const next = [...tiers];
+    const tmp = next[index]!;
+    next[index] = next[target]!;
+    next[target] = tmp;
+    onChange(next);
+  };
+
   const applyBundle = (bundleId: string) => {
     const bundle = TIER_PRESET_BUNDLES.find((b) => b.id === bundleId);
     if (!bundle) return;
     onChange(bundle.build(toolKey || "tool"));
-    toast.success(`Applied "${bundle.label}" monetization tiers`);
+    notify.success(`Applied "${bundle.label}" monetization tiers`, "tiers");
   };
 
   const designTiersWithAI = async () => {
     if (!toolName) {
-      toast.error("Enter a Tool Name first so the local model can design tiers");
+      notify.error("Enter a Tool Name first so the local model can design tiers", "tiers");
       return;
     }
     setAiDesigning(true);
@@ -125,7 +164,7 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
 
       const match = res.response.match(/\[[\s\S]*\]/);
       if (!match) {
-        toast.error("Could not parse tier JSON from local model");
+        notify.error("Could not parse tier JSON from local model", "tiers");
         return;
       }
       const parsed = JSON.parse(match[0]) as Array<Partial<MonetizationTier>>;
@@ -133,19 +172,20 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
         id: `ai-tier-${Date.now()}-${idx}`,
         toolKey: toolKey || "tool",
         tierName: item.tierName || (idx === 0 ? "Free" : "Pro"),
-        accessLevel: (item.accessLevel as AccessLevel) || (idx === 0 ? "freemium" : "pro"),
+        accessLevel: item.accessLevel || (idx === 0 ? "freemium" : "pro"),
         billingModel: (item.billingModel as BillingModel) || (idx === 0 ? "free" : "monthly"),
         priceCents: typeof item.priceCents === "number" ? item.priceCents : idx === 0 ? 0 : 1900,
-        currency: "usd",
+        currency: item.currency || "usd",
         stripePriceId: "",
         features: Array.isArray(item.features) ? item.features : ["Full access"],
         highlighted: Boolean(item.highlighted),
         ctaLabel: item.ctaLabel || (idx === 0 ? "Launch Free" : "Unlock Pro"),
+        badgeLabel: item.highlighted ? "Popular" : "",
       }));
       onChange(built);
-      toast.success(`Designed ${built.length} monetization tiers via ${res.modelUsed}`);
+      notify.success(`Designed ${built.length} monetization tiers via ${res.modelUsed}`, "tiers");
     } catch (err: unknown) {
-      toast.error(`AI tier design failed: ${err instanceof Error ? err.message : String(err)}`);
+      notify.error(`AI tier design failed: ${err instanceof Error ? err.message : String(err)}`, "tiers");
     } finally {
       setAiDesigning(false);
     }
@@ -157,12 +197,13 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
         <Label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           <DollarSign className="h-4 w-4 text-primary" /> Monetization Tiers ({tiers.length})
         </Label>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             type="button"
             variant="outline"
             size="sm"
             disabled={aiDesigning || !ollamaOnline}
+            title={ollamaOnline ? "Design tiers using local Ollama" : "Local Ollama (:11434) offline"}
             onClick={designTiersWithAI}
             className="h-7 gap-1 text-[11px] border-primary/40 text-primary hover:bg-primary/10"
           >
@@ -182,6 +223,20 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
           >
             <Plus className="h-3 w-3" /> Add Tier
           </Button>
+          {tiers.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                onChange([]);
+                notify.info("Cleared custom tiers (reverts to Open Access)", "tiers");
+              }}
+              className="h-7 px-2 text-[11px] text-muted-foreground hover:text-destructive"
+            >
+              Clear
+            </Button>
+          )}
         </div>
       </div>
 
@@ -200,6 +255,12 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
         ))}
       </div>
 
+      <datalist id="kush-access-levels">
+        {ACCESS_LEVEL_SUGGESTIONS.map((lvl) => (
+          <option key={lvl} value={lvl} />
+        ))}
+      </datalist>
+
       {/* Configured Tiers List */}
       {tiers.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border/70 p-3 text-center text-xs text-muted-foreground">
@@ -216,7 +277,7 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
                   : "border-border/60 bg-background/50"
               }`}
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
                   <Crown
                     className={`h-3.5 w-3.5 ${
@@ -224,11 +285,43 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
                     }`}
                   />
                   <span className="font-mono text-xs font-bold">
-                    Tier {idx + 1} · {formatTierPrice(tier.priceCents, tier.billingModel)}
+                    Tier {idx + 1} ·{" "}
+                    {formatTierPrice(
+                      tier.priceCents,
+                      tier.billingModel,
+                      tier.currency,
+                      tier.customBillingLabel
+                    )}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground cursor-pointer">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={idx === 0}
+                    onClick={() => moveTier(idx, -1)}
+                    className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                    title="Move tier up"
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={idx === tiers.length - 1}
+                    onClick={() => moveTier(idx, 1)}
+                    className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                    title="Move tier down"
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => duplicateTier(tier)}
+                    className="p-1 text-muted-foreground hover:text-foreground"
+                    title="Duplicate tier"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                  <label className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground cursor-pointer ml-1">
                     <Switch
                       checked={tier.highlighted}
                       onCheckedChange={(v) => updateTier(tier.id, { highlighted: v })}
@@ -257,19 +350,14 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px]">Access Level</Label>
-                  <select
+                  <Label className="text-[10px]">Access Level (custom or preset)</Label>
+                  <Input
+                    list="kush-access-levels"
                     value={tier.accessLevel}
-                    onChange={(e) =>
-                      updateTier(tier.id, { accessLevel: e.target.value as AccessLevel })
-                    }
-                    className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-                  >
-                    <option value="free">Free</option>
-                    <option value="freemium">Freemium</option>
-                    <option value="pro">Pro (Paid)</option>
-                    <option value="enterprise">Enterprise / Studio</option>
-                  </select>
+                    onChange={(e) => updateTier(tier.id, { accessLevel: e.target.value })}
+                    placeholder="pro, freemium, vip..."
+                    className="h-8 text-xs"
+                  />
                 </div>
               </div>
 
@@ -285,26 +373,46 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
                   >
                     <option value="free">Free ($0)</option>
                     <option value="one_time">One-Time</option>
+                    <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
                     <option value="yearly">Yearly</option>
+                    <option value="custom">Custom</option>
                   </select>
                 </div>
                 <div>
-                  <Label className="text-[10px]">Price (USD)</Label>
+                  <Label className="text-[10px]">Price ({(tier.currency || "usd").toUpperCase()})</Label>
                   <Input
                     type="number"
                     min={0}
-                    step={1}
+                    step="0.01"
                     disabled={tier.billingModel === "free"}
-                    value={Math.round(tier.priceCents / 100)}
+                    value={Number((tier.priceCents / 100).toFixed(2))}
                     onChange={(e) =>
                       updateTier(tier.id, {
-                        priceCents: Math.max(0, Number(e.target.value || 0)) * 100,
+                        priceCents: Math.max(0, Math.round(Number(e.target.value || 0) * 100)),
                       })
                     }
                     className="h-8 text-xs font-mono"
                   />
                 </div>
+                <div>
+                  <Label className="text-[10px]">Currency</Label>
+                  <select
+                    value={(tier.currency || "usd").toLowerCase()}
+                    onChange={(e) => updateTier(tier.id, { currency: e.target.value })}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs font-mono"
+                  >
+                    <option value="usd">USD ($)</option>
+                    <option value="eur">EUR (€)</option>
+                    <option value="gbp">GBP (£)</option>
+                    <option value="cad">CAD (CA$)</option>
+                    <option value="aud">AUD (A$)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <Label className="text-[10px]">CTA Button</Label>
                   <Input
@@ -314,23 +422,59 @@ Respond ONLY with a valid JSON array of 2 objects matching this exact schema:
                     className="h-8 text-xs"
                   />
                 </div>
+                <div>
+                  <Label className="text-[10px]">
+                    {tier.billingModel === "custom" ? "Custom Billing Suffix" : "Badge Label / Trial Days"}
+                  </Label>
+                  {tier.billingModel === "custom" ? (
+                    <Input
+                      value={tier.customBillingLabel ?? ""}
+                      onChange={(e) => updateTier(tier.id, { customBillingLabel: e.target.value })}
+                      placeholder="/seat/mo or /1k credits"
+                      className="h-8 text-xs"
+                    />
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <Input
+                        value={tier.badgeLabel ?? ""}
+                        onChange={(e) => updateTier(tier.id, { badgeLabel: e.target.value })}
+                        placeholder="Badge (Popular)"
+                        className="h-8 text-xs"
+                      />
+                      <Input
+                        type="number"
+                        min={0}
+                        value={tier.trialDays ?? 0}
+                        onChange={(e) =>
+                          updateTier(tier.id, {
+                            trialDays: Math.max(0, Number(e.target.value || 0)),
+                          })
+                        }
+                        placeholder="Trial days"
+                        title="Free trial days (0 = none)"
+                        className="h-8 text-xs font-mono"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
-                  <Label className="text-[10px]">Features (comma-separated)</Label>
-                  <Input
-                    value={tier.features.join(", ")}
+                  <Label className="text-[10px]">Features (one per line)</Label>
+                  <Textarea
+                    rows={3}
+                    value={tier.features.join("\n")}
                     onChange={(e) =>
                       updateTier(tier.id, {
                         features: e.target.value
-                          .split(",")
+                          .split("\n")
                           .map((s) => s.trim())
                           .filter(Boolean),
                       })
                     }
-                    placeholder="Unlimited exports, HD art, Commercial license"
-                    className="h-8 text-xs"
+                    placeholder={"Unlimited exports\nHD art & audio\nCommercial license"}
+                    className="text-xs min-h-[62px]"
                   />
                 </div>
                 <div>

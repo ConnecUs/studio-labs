@@ -103,6 +103,23 @@ export interface ModelHubHealth {
   };
 }
 
+const OLLAMA_BASE_CANDIDATES = ["/api/ollama", "http://127.0.0.1:11434"] as const;
+const CORTEX_STATUS_CANDIDATES = ["/api/cortex/status", "http://127.0.0.1:8000/status"] as const;
+
+let resolvedOllamaBase: string = OLLAMA_BASE_CANDIDATES[0];
+
+async function fetchJsonIfAvailable<T>(url: string, timeoutMs: number): Promise<T | null> {
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!resp.ok) return null;
+    const contentType = resp.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) return null;
+    return (await resp.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Probes the local Ollama daemon and Cortex Swarm OS
  */
@@ -112,50 +129,38 @@ export async function checkModelHubStatus(): Promise<ModelHubHealth> {
     cortex: { online: false },
   };
 
-  // 1. Probe Ollama via Vite proxy or direct localhost
+  // 1. Probe Ollama via Vite proxy or direct localhost (must return real JSON, not HTML fallback)
   const start = performance.now();
   try {
-    const urls = ["/api/ollama/api/tags", "http://127.0.0.1:11434/api/tags"];
-    let res: Response | null = null;
-    for (const url of urls) {
-      try {
-        const resp = await fetch(url, { signal: AbortSignal.timeout(3000) });
-        if (resp.ok) {
-          res = resp;
-          break;
-        }
-      } catch {
-        // continue
+    for (const base of OLLAMA_BASE_CANDIDATES) {
+      const data = await fetchJsonIfAvailable<{ models?: Array<{ name: string }> }>(
+        `${base}/api/tags`,
+        3000
+      );
+      if (data && Array.isArray(data.models)) {
+        resolvedOllamaBase = base;
+        health.ollama.online = true;
+        health.ollama.latencyMs = Math.round(performance.now() - start);
+        health.ollama.models = data.models.map((m) => m.name);
+        break;
       }
     }
 
-    if (res && res.ok) {
-      const data = await res.json();
-      health.ollama.online = true;
-      health.ollama.latencyMs = Math.round(performance.now() - start);
-      if (Array.isArray(data.models)) {
-        health.ollama.models = data.models.map((m: { name: string }) => m.name);
-      }
-    } else {
-      health.ollama.error = "Ollama daemon not responding on port 11434";
+    if (!health.ollama.online) {
+      health.ollama.error = "Ollama daemon not responding with JSON on port 11434";
     }
   } catch (err: unknown) {
     health.ollama.error = err instanceof Error ? err.message : String(err);
   }
 
-  // 2. Probe Cortex OS
+  // 2. Probe Cortex OS (must return real JSON, not HTML fallback)
   try {
-    const urls = ["/api/cortex/status", "http://127.0.0.1:8000/status"];
-    for (const url of urls) {
-      try {
-        const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
-        if (resp.ok) {
-          health.cortex.online = true;
-          health.cortex.status = await resp.json();
-          break;
-        }
-      } catch {
-        // continue
+    for (const url of CORTEX_STATUS_CANDIDATES) {
+      const statusData = await fetchJsonIfAvailable<unknown>(url, 2000);
+      if (statusData !== null) {
+        health.cortex.online = true;
+        health.cortex.status = statusData;
+        break;
       }
     }
   } catch (err: unknown) {
@@ -200,7 +205,7 @@ export async function queryLocalModel(options: QueryModelOptions): Promise<Query
     modelName = "gemma4:12b"; // default high-quality local model
   }
 
-  const endpoint = "/api/ollama/api/generate";
+  const endpoint = `${resolvedOllamaBase}/api/generate`;
   const body = {
     model: modelName,
     prompt: prompt,

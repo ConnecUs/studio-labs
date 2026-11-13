@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import {
   CURATED_COVER_GALLERY,
   getDefaultCoverForTool,
-  type GalleryItem,
+  resolveCoverUrl,
 } from "@/lib/coverGallery";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,10 +13,9 @@ import {
   Sparkles,
   Check,
   X,
-  ExternalLink,
   Layers,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notify } from "@/lib/notificationLog";
 import { queryLocalModel } from "@/lib/modelHubRouter";
 import { getCeoCode } from "@/components/CeoCodeGate";
 
@@ -25,6 +24,30 @@ interface CoverImagePickerProps {
   onChange: (url: string) => void;
   toolName?: string;
   toolTag?: string;
+  ollamaOnline?: boolean;
+  selectedModel?: string;
+}
+
+async function compressImageDataUrl(dataUrl: string, maxWidth = 1280, quality = 0.85): Promise<string> {
+  if (dataUrl.length < 250_000 || typeof document === "undefined") return dataUrl;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(dataUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 export function CoverImagePicker({
@@ -32,13 +55,17 @@ export function CoverImagePicker({
   onChange,
   toolName = "",
   toolTag = "",
+  ollamaOnline = false,
+  selectedModel = "character-designer:latest",
 }: CoverImagePickerProps) {
   const [showGallery, setShowGallery] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [aiGenerating, setAiGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const activeDisplayUrl = coverUrl || getDefaultCoverForTool({ name: toolName, tag: toolTag });
+  const normalizedCoverUrl = resolveCoverUrl(coverUrl);
+  const activeDisplayUrl =
+    normalizedCoverUrl || getDefaultCoverForTool({ name: toolName, tag: toolTag });
 
   const categories = [
     "All",
@@ -54,25 +81,28 @@ export function CoverImagePicker({
       ? CURATED_COVER_GALLERY
       : CURATED_COVER_GALLERY.filter((item) => item.category === selectedCategory);
 
-  // Handle local image file upload -> convert to base64 DataURL
+  // Handle local image file upload -> upload to VPS or compress to base64 DataURL
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      toast.error("Please upload a valid image file (.png, .jpg, .webp)");
+      notify.error("Please upload a valid image file (.png, .jpg, .webp)", "cover");
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("File is larger than 5MB. Please choose an optimized image.");
+      notify.error("File is larger than 5MB. Please choose an optimized image.", "cover");
       return;
     }
 
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const dataUrl = event.target?.result as string;
-      if (!dataUrl) return;
+      const rawDataUrl = event.target?.result as string;
+      if (!rawDataUrl) return;
+
+      const dataUrl = await compressImageDataUrl(rawDataUrl);
 
       const ceoCode = getCeoCode();
       if (ceoCode) {
@@ -89,36 +119,40 @@ export function CoverImagePicker({
             const json = (await res.json()) as { url?: string };
             if (json.url) {
               onChange(json.url);
-              toast.success(`Uploaded "${file.name}" to KushNovels.com!`);
+              notify.success(`Uploaded "${file.name}" to KushNovels.com!`, "cover");
               return;
             }
           }
         } catch {
-          // Fallback to inline DataURL for local dev
+          // Fallback to inline compressed DataURL for local dev
         }
       }
 
       onChange(dataUrl);
-      toast.success(`Loaded "${file.name}" as cover image!`);
+      notify.success(`Loaded "${file.name}" as cover image!`, "cover");
     };
     reader.readAsDataURL(file);
   };
 
   // AI Cover Concept Generator via Local Ollama
   const generateCoverPromptWithAI = async () => {
+    if (!ollamaOnline) {
+      notify.warning("Local Ollama (:11434) is offline — start Ollama locally to generate AI cover ideas.", "ollama");
+      return;
+    }
     setAiGenerating(true);
     try {
       const res = await queryLocalModel({
-        model: "character-designer:latest",
+        model: selectedModel,
         prompt: `Create a cinematic visual cover art description for this online tool:
 Tool Name: "${toolName || "Kush Online Studio"}"
 Tag/Category: "${toolTag || "Creative Studio"}"
 
 Give a 1-sentence prompt description of what the cover art should look like in the 25th Dynasty aesthetic (ancient-future Nubian gold, cyber neon, holographic hieroglyphs).`,
       });
-      toast.info(`AI Concept: ${res.response.slice(0, 100)}...`);
+      notify.info(`AI Concept (${res.modelUsed}): ${res.response.trim()}`, "ollama");
     } catch {
-      toast.error("Local model not reachable for cover suggestion");
+      notify.error("Local model not reachable for cover suggestion", "ollama");
     } finally {
       setAiGenerating(false);
     }
@@ -201,7 +235,8 @@ Give a 1-sentence prompt description of what the cover art should look like in t
           type="button"
           variant="ghost"
           size="sm"
-          disabled={aiGenerating}
+          disabled={aiGenerating || !ollamaOnline}
+          title={ollamaOnline ? "Generate cover concept via local Ollama" : "Local Ollama (:11434) offline"}
           onClick={generateCoverPromptWithAI}
           className="gap-1.5 text-xs text-muted-foreground hover:text-foreground col-span-2 sm:col-span-1"
         >
@@ -260,14 +295,14 @@ Give a 1-sentence prompt description of what the cover art should look like in t
           {/* Image Cards Grid */}
           <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1 sm:grid-cols-3">
             {filteredItems.map((item) => {
-              const isSelected = coverUrl === item.url;
+              const isSelected = normalizedCoverUrl === resolveCoverUrl(item.url);
               return (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => {
                     onChange(item.url);
-                    toast.success(`Selected "${item.title}"`);
+                    notify.success(`Selected cover "${item.title}"`, "cover");
                   }}
                   className={`group relative aspect-[16/10] overflow-hidden rounded-md border text-left transition-all ${
                     isSelected

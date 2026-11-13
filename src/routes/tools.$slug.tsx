@@ -53,8 +53,14 @@ function ToolCheckoutModal({
 }) {
   const create = useServerFn(createToolCheckout);
   const fetchClientSecret = useCallback(async () => {
-    const billingModel =
-      tier.billingModel === "free" ? "one_time" : tier.billingModel;
+    const billingModel: "one_time" | "monthly" | "yearly" =
+      tier.billingModel === "yearly"
+        ? "yearly"
+        : tier.billingModel === "monthly" ||
+            tier.billingModel === "weekly" ||
+            tier.billingModel === "quarterly"
+          ? "monthly"
+          : "one_time";
     const r = await create({
       data: {
         toolSlug,
@@ -76,7 +82,14 @@ function ToolCheckoutModal({
     <div className="my-6 rounded-2xl border border-primary/40 bg-card p-4 shadow-lg">
       <div className="mb-3 flex items-center justify-between">
         <p className="font-display text-lg font-bold">
-          Unlock {toolName} — {tier.tierName} ({formatTierPrice(tier.priceCents, tier.billingModel)})
+          Unlock {toolName} — {tier.tierName} (
+          {formatTierPrice(
+            tier.priceCents,
+            tier.billingModel,
+            tier.currency,
+            tier.customBillingLabel
+          )}
+          )
         </p>
         <Button size="sm" variant="ghost" onClick={onClose}>
           Close
@@ -221,16 +234,26 @@ function ToolPage() {
                       <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
                         {tier.accessLevel}
                       </span>
-                      {tier.highlighted && (
+                      {(tier.highlighted || tier.badgeLabel) && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 font-mono text-[10px] font-bold text-primary-foreground">
-                          <Crown className="h-3 w-3" /> Popular
+                          <Crown className="h-3 w-3" /> {tier.badgeLabel || "Popular"}
                         </span>
                       )}
                     </div>
                     <h3 className="mt-2 font-display text-2xl font-bold">{tier.tierName}</h3>
                     <p className="mt-1 font-display text-3xl font-bold text-primary">
-                      {formatTierPrice(tier.priceCents, tier.billingModel)}
+                      {formatTierPrice(
+                        tier.priceCents,
+                        tier.billingModel,
+                        tier.currency,
+                        tier.customBillingLabel
+                      )}
                     </p>
+                    {tier.trialDays && tier.trialDays > 0 ? (
+                      <p className="mt-1 font-mono text-[11px] text-emerald-500">
+                        Includes {tier.trialDays}-day free trial
+                      </p>
+                    ) : null}
                     <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
                       {tier.features.map((feat, i) => (
                         <li key={i} className="flex items-start gap-2">
@@ -253,7 +276,13 @@ function ToolPage() {
                       </Button>
                     ) : (
                       <Button className="w-full" onClick={() => handleTierAction(tier)}>
-                        {tier.ctaLabel || `Unlock ${formatTierPrice(tier.priceCents, tier.billingModel)}`}
+                        {tier.ctaLabel ||
+                          `Unlock ${formatTierPrice(
+                            tier.priceCents,
+                            tier.billingModel,
+                            tier.currency,
+                            tier.customBillingLabel
+                          )}`}
                       </Button>
                     )}
                   </div>

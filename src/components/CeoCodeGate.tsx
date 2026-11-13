@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Lock, ShieldCheck, KeyRound, ArrowRight, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { clearNotificationLog } from "@/lib/notificationLog";
 
 const DEFAULT_COMMANDER_CODES = ["2990", "2525", "1974", "7470", "1234", "0000", "2500"];
 const SESSION_UNLOCK_KEY = "kush_studio_ceo_unlocked";
@@ -21,6 +22,7 @@ export function lockCeoSession(): void {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(SESSION_UNLOCK_KEY);
   sessionStorage.removeItem(SESSION_CODE_KEY);
+  clearNotificationLog();
 }
 
 function validateCommanderCode(code: string): boolean {

@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect } from "react";
-import { toast } from "sonner";
+import { useState, useEffect, useCallback } from "react";
+import { notify } from "@/lib/notificationLog";
+import { NotificationTerminal } from "@/components/NotificationTerminal";
 import {
   ArrowDown,
   ArrowUp,
@@ -24,7 +25,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   toolsQuery,
   type Tool,
-  saveLocalStoredTools,
+  saveLocalStoredToolsAsync,
   clearLocalStoredTools,
   saveRemoteTools,
 } from "@/lib/tools";
@@ -34,7 +35,7 @@ import {
   type ModelHubHealth,
 } from "@/lib/modelHubRouter";
 import { CoverImagePicker } from "@/components/CoverImagePicker";
-import { coverPath, getDefaultCoverForTool } from "@/lib/coverGallery";
+import { coverPath, getDefaultCoverForTool, resolveCoverUrl } from "@/lib/coverGallery";
 import { MonetizationTierEditor } from "@/components/MonetizationTierEditor";
 import {
   type MonetizationTier,
@@ -137,22 +138,31 @@ function Admin() {
 
   // Model Manager Hub state
   const [modelHealth, setModelHealth] = useState<ModelHubHealth | null>(null);
+  const [probingModel, setProbingModel] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("qwen2.5-coder:14b");
   const [generatingWithAI, setGeneratingWithAI] = useState(false);
 
-  useEffect(() => {
-    checkModelHubStatus()
-      .then((h) => {
-        setModelHealth(h);
-        if (h.ollama.models.length > 0) {
-          const preferred =
-            h.ollama.models.find((m) => m.includes("coder") || m.includes("kush") || m.includes("gemma")) ||
-            h.ollama.models[0];
-          if (preferred) setSelectedModel(preferred);
-        }
-      })
-      .catch(console.error);
+  const probeModelHub = useCallback(async () => {
+    setProbingModel(true);
+    try {
+      const h = await checkModelHubStatus();
+      setModelHealth(h);
+      if (h.ollama.models.length > 0) {
+        const preferred =
+          h.ollama.models.find((m) => m.includes("coder") || m.includes("kush") || m.includes("gemma")) ||
+          h.ollama.models[0];
+        if (preferred) setSelectedModel(preferred);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setProbingModel(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void probeModelHub();
+  }, [probeModelHub]);
 
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["tools"] });
@@ -163,7 +173,7 @@ function Admin() {
   // AI-Assisted Metadata Generation using Local Model Managers
   async function generateWithLocalModel() {
     if (!form.name && !form.url) {
-      toast.error("Please enter a Tool Name or URL first");
+      notify.error("Please enter a Tool Name or URL first", "ollama");
       return;
     }
 
@@ -200,15 +210,40 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
           tag: parsed.tag || prev.tag,
           slug: parsed.slug || prev.slug || slugify(prev.name),
         }));
-        toast.success(`Generated copy with ${res.modelUsed}`);
+        notify.success(`Generated copy with ${res.modelUsed}`, "ollama");
       } else {
-        toast.info("Generated text received, please check fields.");
+        notify.info("Generated text received, please check fields.", "ollama");
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`Local model generation failed: ${msg}`);
+      notify.error(`Local model generation failed: ${msg}`, "ollama");
     } finally {
       setGeneratingWithAI(false);
+    }
+  }
+
+  async function persistCatalogChange(
+    currentList: Tool[],
+    successRemoteMsg: string,
+    localFallbackMsg: string,
+    updatedSlug?: string
+  ) {
+    await saveLocalStoredToolsAsync(currentList);
+    qc.setQueryData(["tools"], currentList);
+    if (updatedSlug) {
+      const match = currentList.find((t) => t.slug === updatedSlug) ?? null;
+      qc.setQueryData(["tool", updatedSlug], match);
+    }
+
+    const remoteResult = await saveRemoteTools(currentList, getCeoCode());
+    if (remoteResult.ok) {
+      notify.success(successRemoteMsg, "catalog");
+      await refresh();
+    } else {
+      notify.warning(
+        `${localFallbackMsg} (Remote sync skipped: ${remoteResult.error || "unavailable"})`,
+        "sync"
+      );
     }
   }
 
@@ -220,7 +255,6 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
       cover_url: form.cover_url || null,
     };
 
-    // Persist in browser IndexedDB + localStorage + live VPS catalog
     const currentList = tools.data ? [...tools.data] : [];
     if (editing) {
       const idx = currentList.findIndex((t) => t.id === editing);
@@ -239,28 +273,22 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
       };
       currentList.push(newTool);
     }
-    saveLocalStoredTools(currentList);
-    saveToolTiers(payload.slug, formTiers);
-    const remoteSaved = await saveRemoteTools(currentList, getCeoCode());
 
-    if (remoteSaved) {
-      toast.success(
-        editing
-          ? "Tool & monetization tiers updated live on KushNovels.com"
-          : "Tool & monetization tiers published live to KushNovels.com"
-      );
-    } else {
-      toast.success(
-        editing
-          ? "Tool & monetization tiers saved in browser IndexedDB"
-          : "Tool & monetization tiers added to browser IndexedDB"
-      );
-    }
+    saveToolTiers(payload.slug, formTiers);
+    await persistCatalogChange(
+      currentList,
+      editing
+        ? `Updated "${payload.name}" & monetization tiers live on KushNovels.com`
+        : `Published "${payload.name}" & monetization tiers live to KushNovels.com`,
+      editing
+        ? `Saved "${payload.name}" & monetization tiers in browser IndexedDB`
+        : `Added "${payload.name}" & monetization tiers to browser IndexedDB`,
+      payload.slug
+    );
 
     setForm(empty);
     setFormTiers([]);
     setEditing(null);
-    await refresh();
   }
 
   function edit(t: Tool) {
@@ -277,6 +305,7 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
       published: t.published,
     });
     setFormTiers(getToolTiers(t.slug));
+    notify.info(`Loaded "${t.name}" into editor`, "catalog");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -284,10 +313,11 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
     if (!confirm(`Delete ${t.name}?`)) return;
 
     const currentList = (tools.data ?? []).filter((item) => item.id !== t.id);
-    saveLocalStoredTools(currentList);
-    await saveRemoteTools(currentList, getCeoCode());
-    toast.success(`Deleted ${t.name}`);
-    await refresh();
+    await persistCatalogChange(
+      currentList,
+      `Deleted "${t.name}" from live catalog`,
+      `Deleted "${t.name}" from browser IndexedDB`
+    );
   }
 
   async function toggle(t: Tool) {
@@ -295,9 +325,12 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
     const currentList = (tools.data ?? []).map((item) =>
       item.id === t.id ? { ...item, published: updatedPublished } : item
     );
-    saveLocalStoredTools(currentList);
-    await saveRemoteTools(currentList, getCeoCode());
-    await refresh();
+    await persistCatalogChange(
+      currentList,
+      `${t.name} is now ${updatedPublished ? "Visible" : "Hidden"} live`,
+      `${t.name} set to ${updatedPublished ? "Visible" : "Hidden"} locally`,
+      t.slug
+    );
   }
 
   async function move(i: number, dir: -1 | 1) {
@@ -313,9 +346,11 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
       item.sort_order = index;
     });
 
-    saveLocalStoredTools(list);
-    await saveRemoteTools(list, getCeoCode());
-    await refresh();
+    await persistCatalogChange(
+      list,
+      `Reordered "${temp.name}" live`,
+      `Reordered "${temp.name}" locally`
+    );
   }
 
   function applyPreset(p: typeof PRESET_ONLINE_TOOLS[0]) {
@@ -329,14 +364,14 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
       slug: slugify(p.name),
       cover_url: p.cover_url || getDefaultCoverForTool({ name: p.name, tag: p.tag }),
     }));
-    toast.info(`Loaded preset: ${p.name}`);
+    notify.info(`Loaded preset: ${p.name}`, "catalog");
   }
 
   function handleResetDatabase() {
     if (confirm("Reset local catalog overrides and pull freshly from online database?")) {
       clearLocalStoredTools();
-      refresh();
-      toast.success("Reset to online database tools.");
+      void refresh();
+      notify.success("Reset to online database tools.", "sync");
     }
   }
 
@@ -401,8 +436,13 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
         </div>
       </section>
 
+      {/* Session Notification Terminal */}
+      <div className="mx-auto max-w-6xl px-6 pt-6">
+        <NotificationTerminal />
+      </div>
+
       {/* Main Form & Management Grid */}
-      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-10 lg:grid-cols-[440px_1fr]">
+      <div className="mx-auto grid max-w-6xl gap-10 px-6 py-8 lg:grid-cols-[440px_1fr]">
         {/* Tool Edit/Add Form with Local Model AI Assistant */}
         <form onSubmit={submit} className="space-y-4 glass rounded-2xl p-6 border border-border/60">
           <div className="flex items-center justify-between border-b border-border/40 pb-3">
@@ -437,26 +477,51 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
 
           {/* Local Model Manager Generator Bar */}
           <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-primary">
-                <Sparkles className="h-3.5 w-3.5" />
-                Local Model Copywriter
-              </span>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="rounded border border-border bg-background px-2 py-0.5 text-[11px] font-mono"
-              >
-                {modelHealth?.ollama.models && modelHealth.ollama.models.length > 0 ? (
-                  modelHealth.ollama.models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))
-                ) : (
-                  <option value="qwen2.5-coder:14b">qwen2.5-coder:14b</option>
-                )}
-              </select>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Local Model Copywriter
+                </span>
+                <span
+                  className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                    modelHealth?.ollama.online
+                      ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                      : "bg-zinc-500/15 text-muted-foreground border border-border"
+                  }`}
+                >
+                  {modelHealth?.ollama.online
+                    ? `Online (${modelHealth.ollama.models.length})`
+                    : "Offline"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <select
+                  value={selectedModel}
+                  disabled={!modelHealth?.ollama.online}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="rounded border border-border bg-background px-2 py-0.5 text-[11px] font-mono disabled:opacity-50"
+                >
+                  {modelHealth?.ollama.models && modelHealth.ollama.models.length > 0 ? (
+                    modelHealth.ollama.models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="qwen2.5-coder:14b">qwen2.5-coder:14b</option>
+                  )}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void probeModelHub()}
+                  disabled={probingModel}
+                  title="Re-check local Ollama (:11434)"
+                  className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground"
+                >
+                  <RefreshCw className={`h-3 w-3 ${probingModel ? "animate-spin" : ""}`} />
+                </button>
+              </div>
             </div>
             <p className="text-[11px] text-muted-foreground">
               Uses local Ollama (:11434) to auto-generate tagline, description, tag and slug.
@@ -523,6 +588,8 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
             onChange={(url) => setForm((prev) => ({ ...prev, cover_url: url }))}
             toolName={form.name}
             toolTag={form.tag}
+            ollamaOnline={Boolean(modelHealth?.ollama.online)}
+            selectedModel={selectedModel}
           />
 
           {/* Per-Tool Monetization & Pricing Tiers */}
@@ -569,6 +636,7 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
                 onClick={() => {
                   setEditing(null);
                   setForm(empty);
+                  setFormTiers([]);
                 }}
               >
                 Cancel
@@ -615,7 +683,7 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
 
                 <div className="h-12 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted relative">
                   <img
-                    src={t.cover_url || getDefaultCoverForTool(t)}
+                    src={resolveCoverUrl(t.cover_url) || getDefaultCoverForTool(t)}
                     alt={t.name}
                     className="h-full w-full object-cover"
                     onError={(e) => {
@@ -719,7 +787,7 @@ Generate compelling metadata for this online tool. Respond ONLY with valid JSON 
                   a.download = "kush-tools-publish-bundle.json";
                   a.click();
                   URL.revokeObjectURL(url);
-                  toast.success("Downloaded kush-tools-publish-bundle.json");
+                  notify.success("Downloaded kush-tools-publish-bundle.json", "export");
                 }}
               >
                 <Download className="h-3.5 w-3.5" /> Export Publish Bundle (.json)

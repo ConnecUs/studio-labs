@@ -6,6 +6,20 @@
 const BASE_PREFIX = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
 export const coverPath = (file: string) => `${BASE_PREFIX}/covers/${file.replace(/^\/?(covers\/)?/, "")}`;
 
+/**
+ * Normalizes stored cover URLs across local ("/") and published ("/studio-labs/") base paths.
+ */
+export function resolveCoverUrl(url?: string | null): string {
+  if (!url) return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/^\/(?:studio-labs\/)?covers\/(.+)$/i);
+  if (match && match[1]) {
+    return `${BASE_PREFIX}/covers/${match[1]}`;
+  }
+  return trimmed;
+}
+
 export interface GalleryItem {
   id: string;
   title: string;
